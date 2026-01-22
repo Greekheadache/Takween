@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Shadow-morph-30</title>
+<style>
+  html,body{height:100%;margin:0;padding:0}
+  body{background:transparent;margin:0;padding:0;}
+  #player{position:absolute; top:8px; left:8px; display:block; isolation:isolate;}
+</style>
+</head>
+<body>
+<svg id="player" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+(function(){
+  const FPS = 30;
+  const FRAME_COUNT = 81;
+  const PAD = 3;
+  const FRAME_PATH = 'frames/svg/frame_';
+  const svgEl = document.getElementById('player');
+
+  function pad(n){ return String(n).padStart(PAD, '0'); }
+
+  // simple cache for fetched frames
+  const cache = new Array(FRAME_COUNT);
+
+  async function fetchFrame(i){
+    if(i < 0 || i >= FRAME_COUNT) return '';
+    if(cache[i]) return cache[i];
+    try {
+      const resp = await fetch(FRAME_PATH + pad(i) + '.svg');
+      if(!resp.ok) { cache[i] = ''; return ''; }
+      const txt = await resp.text();
+      cache[i] = txt;
+      return txt;
+    } catch(e){
+      cache[i] = '';
+      return '';
+    }
+  }
+
+  function computeBounds(){
+    const SHAPE_TAGS = ['path','rect','circle','ellipse','polygon','polyline','line','g','text'];
+    const selector = SHAPE_TAGS.join(',');
+    const elems = Array.from(svgEl.querySelectorAll(selector)).filter(e=>{
+      try{ return typeof e.getBBox === 'function'; }catch(e){ return false; }
+    });
+    if(elems.length === 0) return null;
+    let bb = elems[0].getBBox();
+    let minX = bb.x, minY = bb.y, maxX = bb.x + bb.width, maxY = bb.y + bb.height;
+    for(let i=1;i<elems.length;i++){
+      const b = elems[i].getBBox();
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.width);
+      maxY = Math.max(maxY, b.y + b.height);
+    }
+    return { x: minX, y: minY, width: (maxX - minX), height: (maxY - minY) };
+  }
+
+  async function waitForSvgImages(timeout = 2000){
+    const images = Array.from(svgEl.querySelectorAll('image'));
+    if(images.length === 0) return;
+    return new Promise(resolve => {
+      let remaining = images.length;
+      let done = false;
+      const checkDone = () => { if(done) return; remaining--; if(remaining <= 0){ done = true; resolve(); } };
+      images.forEach(img => {
+        const href = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink','href');
+        if(!href){ checkDone(); return; }
+        const test = new Image();
+        test.onload = checkDone;
+        test.onerror = checkDone;
+        test.src = href;
+      });
+      setTimeout(()=>{ if(!done){ done = true; resolve(); } }, timeout);
+    });
+  }
+
+  // load first frame and size player
+  (async ()=>{
+    const first = await fetchFrame(0);
+    svgEl.innerHTML = first || '';
+    await waitForSvgImages(2000);
+    const bounds = computeBounds();
+    if(bounds){
+      svgEl.setAttribute('viewBox', bounds.x + ' ' + bounds.y + ' ' + bounds.width + ' ' + bounds.height);
+      const wpx = Math.max(1, Math.ceil(bounds.width));
+      const hpx = Math.max(1, Math.ceil(bounds.height));
+      const PREVIEW_SCALE = 0.5;
+      svgEl.style.width = Math.round(wpx * PREVIEW_SCALE) + 'px';
+      svgEl.style.height = Math.round(hpx * PREVIEW_SCALE) + 'px';
+      svgEl.style.transformOrigin = '0 0';
+      svgEl.style.transform = 'scale(' + PREVIEW_SCALE + ')';
+    } else {
+      svgEl.setAttribute('viewBox', '0 0 1 1');
+      svgEl.style.width = '200px';
+      svgEl.style.height = '200px';
+    }
+  })();
+
+  let running = false;
+  let direction = 1;
+  async function runOnce(){
+    if(running) return;
+    running = true;
+    const frameDuration = 1000 / FPS;
+    let idx = direction === 1 ? 0 : (FRAME_COUNT - 1);
+    // render initial frame
+    const first = await fetchFrame(idx);
+    svgEl.innerHTML = first || '';
+    let last = performance.now();
+    while(true){
+      await new Promise(r => requestAnimationFrame(r));
+      const now = performance.now();
+      if(now - last >= frameDuration){
+        idx += direction;
+        if(idx < 0 || idx >= FRAME_COUNT) break;
+        const content = await fetchFrame(idx);
+        svgEl.innerHTML = content || '';
+        last = now;
+      }
+    }
+    // final frame
+    const finalIdx = direction === 1 ? (FRAME_COUNT - 1) : 0;
+    const finalContent = await fetchFrame(finalIdx);
+    svgEl.innerHTML = finalContent || '';
+    running = false;
+    direction = -direction;
+  }
+
+  svgEl.addEventListener('click', (ev) => {
+    if(running) return;
+    const tgt = ev.target;
+    if(tgt === svgEl) return;
+    let el = tgt;
+    let ok = false;
+    while(el && el !== svgEl){
+      if(el.tagName && ['path','rect','circle','ellipse','polygon','polyline','line','g','text'].includes(el.tagName.toLowerCase())){ ok = true; break; }
+      el = el.parentNode;
+    }
+    if(!ok) return;
+    runOnce();
+  });
+})();
+</script>
+</body>
+</html>
